@@ -1,0 +1,495 @@
+"""
+AlgoGenesis Core v0.2 - Production Ready
+Evolution of Algorithms using Universal Hierarchy Formalism (UHF)
+Enhanced with proper DNA integration, logging, and statistics
+"""
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import gymnasium as gym
+import random
+from copy import deepcopy
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import List, Dict, Tuple
+import matplotlib.pyplot as plt
+from collections import deque
+
+# ====================== Logging Setup ======================
+def setup_logging(log_dir: str = "logs"):
+    """Configure logging for evolution tracking"""
+    Path(log_dir).mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    logger = logging.getLogger("AlgoGenesis")
+    logger.setLevel(logging.DEBUG)
+    
+    fh = logging.FileHandler(f"{log_dir}/evolution_{timestamp}.log")
+    fh.setLevel(logging.DEBUG)
+    
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+    
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+    
+    return logger
+
+
+logger = setup_logging()
+
+
+# ====================== UHF Core (Universal Hierarchy Formalism) ======================
+class UHFCore:
+    """
+    Universal Hierarchy Formalism - mathematical framework for coherence regulation
+    
+    Gamma encodes the effective "harmony" between:
+    - Population diversity (delta_i)
+    - Agent maturity (M)
+    - Performance level (T)
+    """
+    
+    def __init__(self, alpha: float = 0.5, beta: float = 0.3):
+        self.alpha = alpha  # diversity weight
+        self.beta = beta    # performance weight
+    
+    def compute_gamma(
+        self, 
+        delta_i: float = 1.0, 
+        M: float = 1.0, 
+        T: float = 1.0
+    ) -> float:
+        """
+        Compute coherence metric
+        
+        Args:
+            delta_i: Mean absolute value of DNA (diversity indicator)
+            M: Agent age normalized (0-1)
+            T: Fitness normalized (0-1)
+        
+        Returns:
+            gamma: Coherence value in range [0, 1]
+        """
+        # Normalize inputs
+        delta_i = np.clip(delta_i, 0.01, 2.0)
+        M = np.clip(M, 0.0, 1.0)
+        T = np.clip(T, 0.0, 1.0)
+        
+        # UHF formula: balance between diversity and performance
+        coherence = (
+            self.alpha * (1.0 / (1.0 + delta_i)) +  # Prefer moderate diversity
+            self.beta * T +  # Reward performance
+            (1.0 - self.alpha - self.beta) * (1.0 - np.exp(-M))  # Reward maturity
+        )
+        
+        return float(np.clip(coherence, 0.0, 1.0))
+    
+    def compute_population_diversity(self, population: List['EvolvingAgent']) -> float:
+        """Compute genetic diversity of population"""
+        if len(population) < 2:
+            return 0.0
+        
+        dnae = np.array([agent.dna for agent in population])
+        return float(np.mean(np.std(dnae, axis=0)))
+
+
+# ====================== Neural Policy with DNA Integration ======================
+class PolicyNet(nn.Module):
+    """Neural policy network that integrates DNA into weights"""
+    
+    def __init__(self, state_dim: int = 4, hidden_dim: int = 32, dna_dim: int = 32):
+        super().__init__()
+        self.state_dim = state_dim
+        self.hidden_dim = hidden_dim
+        self.dna_dim = dna_dim
+        
+        # Network architecture
+        self.fc1 = nn.Linear(state_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, 2)  # CartPole: 2 actions
+        
+        # Learnable parameters for DNA integration
+        self.dna_weight1 = nn.Parameter(torch.randn(dna_dim) * 0.1)
+        self.dna_weight2 = nn.Parameter(torch.randn(dna_dim) * 0.1)
+    
+    def forward(self, x: torch.Tensor, dna: torch.Tensor = None) -> torch.Tensor:
+        """Forward pass with optional DNA modulation"""
+        x = F.relu(self.fc1(x))
+        
+        # Modulate hidden layer with DNA if provided
+        if dna is not None:
+            dna_signal = torch.sigmoid(dna[:self.hidden_dim])
+            x = x * (1.0 + 0.1 * dna_signal[:x.shape[-1]])
+        
+        x = F.relu(self.fc2(x))
+        
+        if dna is not None:
+            dna_signal = torch.sigmoid(dna[self.hidden_dim:])
+            x = x * (1.0 + 0.1 * dna_signal[:x.shape[-1]])
+        
+        x = self.fc3(x)
+        return x
+    
+    def load_from_dna(self, dna: np.ndarray):
+        """Initialize weights influenced by DNA"""
+        dna_tensor = torch.FloatTensor(dna)
+        
+        # Use DNA to influence weight initialization
+        with torch.no_grad():
+            scale = np.clip(np.abs(dna).mean(), 0.1, 2.0)
+            for param in self.parameters():
+                param.data *= scale
+
+
+# ====================== Evolving Agent ======================
+class EvolvingAgent:
+    """Single agent in the evolutionary population"""
+    
+    def __init__(self, dna: np.ndarray = None, agent_id: int = 0):
+        self.agent_id = agent_id
+        self.dna = dna if dna is not None else np.random.uniform(-1.5, 1.5, 32).astype(np.float32)
+        
+        self.policy = PolicyNet(state_dim=4, hidden_dim=32, dna_dim=32)
+        self.policy.load_from_dna(self.dna)
+        
+        self.fitness = 0.0
+        self.gamma = 0.0
+        self.age = 0
+        self.generation_born = 0
+        self.lifetime = 0
+        self.revolution_count = 0
+        
+        # Statistics
+        self.fitness_history = deque(maxlen=10)
+        self.best_episode = 0
+    
+    def evaluate(
+        self, 
+        env: gym.Env, 
+        episodes: int = 5,
+        render: bool = False
+    ) -> float:
+        """
+        Evaluate agent on given environment
+        
+        Args:
+            env: Gymnasium environment
+            episodes: Number of evaluation episodes
+            render: Whether to render episodes
+        
+        Returns:
+            Average fitness across episodes
+        """
+        total_reward = 0
+        max_episode_reward = 0
+        
+        for _ in range(episodes):
+            state, _ = env.reset()
+            done = False
+            truncated = False
+            episode_reward = 0
+            steps = 0
+            
+            while not (done or truncated) and steps < 500:
+                state_t = torch.FloatTensor(state).unsqueeze(0)
+                dna_t = torch.FloatTensor(self.dna).unsqueeze(0)
+                
+                with torch.no_grad():
+                    action_logits = self.policy(state_t, dna_t[:, :32])
+                    action = torch.argmax(action_logits).item()
+                
+                state, reward, done, truncated, _ = env.step(action)
+                episode_reward += reward
+                steps += 1
+            
+            total_reward += episode_reward
+            max_episode_reward = max(max_episode_reward, episode_reward)
+        
+        self.fitness = total_reward / episodes
+        self.fitness_history.append(self.fitness)
+        self.best_episode = max_episode_reward
+        self.lifetime += 1
+        
+        return self.fitness
+    
+    def mutate(self, mutation_rate: float = 0.8, mutation_std: float = 0.35):
+        """Apply normal mutation to DNA"""
+        if random.random() < mutation_rate:
+            self.dna += np.random.normal(0, mutation_std, 32).astype(np.float32)
+            self.dna = np.clip(self.dna, -2.0, 2.0).astype(np.float32)
+    
+    def clone(self) -> 'EvolvingAgent':
+        """Create exact copy of agent"""
+        clone = EvolvingAgent(deepcopy(self.dna))
+        clone.policy.load_from_dna(clone.dna)
+        return clone
+    
+    def __repr__(self) -> str:
+        return f"Agent#{self.agent_id}(fit={self.fitness:.1f}, γ={self.gamma:.3f}, age={self.age})"
+
+
+# ====================== Evolution Engine ======================
+class AlgoGenesis:
+    """Main evolutionary algorithm orchestrator"""
+    
+    def __init__(
+        self,
+        pop_size: int = 25,
+        generations: int = 100,
+        env_name: str = 'CartPole-v1',
+        revolution_prob: float = 0.09,
+        elite_fraction: float = 0.25,
+    ):
+        self.pop_size = pop_size
+        self.generations = generations
+        self.env_name = env_name
+        self.revolution_prob = revolution_prob
+        self.elite_fraction = elite_fraction
+        
+        self.population: List[EvolvingAgent] = [
+            EvolvingAgent(agent_id=i) for i in range(pop_size)
+        ]
+        
+        self.uhf = UHFCore(alpha=0.5, beta=0.3)
+        self.env = gym.make(env_name)
+        
+        # Statistics tracking
+        self.history = {
+            'best_fitness': [],
+            'mean_fitness': [],
+            'worst_fitness': [],
+            'population_diversity': [],
+            'revolution_count': [],
+            'gamma_mean': [],
+        }
+        
+        self.best_agent_ever: EvolvingAgent = None
+        self.best_fitness_ever = 0.0
+        self.revolution_events = []
+        
+        logger.info(f"AlgoGenesis initialized: {pop_size} agents, {generations} generations")
+        logger.info(f"Environment: {env_name}, Revolution prob: {revolution_prob}")
+    
+    def run(self) -> EvolvingAgent:
+        """Execute evolution loop"""
+        logger.info("=" * 80)
+        logger.info("🚀 STARTING EVOLUTION")
+        logger.info("=" * 80)
+        
+        start_time = datetime.now()
+        
+        for generation in range(self.generations):
+            # =============== EVALUATION PHASE ===============
+            for agent in self.population:
+                agent.evaluate(self.env, episodes=5)
+                agent.age += 1
+            
+            # =============== CALCULATE UHF METRICS ===============
+            pop_diversity = self.uhf.compute_population_diversity(self.population)
+            
+            for agent in self.population:
+                delta_i = float(np.abs(agent.dna).mean())
+                M = min(agent.age / float(self.generations), 1.0)
+                T = min(agent.fitness / 500.0, 1.0)
+                agent.gamma = self.uhf.compute_gamma(delta_i, M, T)
+            
+            # =============== SELECTION & STATISTICS ===============
+            self.population.sort(key=lambda x: x.fitness, reverse=True)
+            
+            best_agent = self.population[0]
+            mean_fitness = np.mean([a.fitness for a in self.population])
+            worst_fitness = self.population[-1].fitness
+            gamma_mean = np.mean([a.gamma for a in self.population])
+            
+            # Update best ever
+            if best_agent.fitness > self.best_fitness_ever:
+                self.best_fitness_ever = best_agent.fitness
+                self.best_agent_ever = best_agent.clone()
+                logger.info(f"🏆 NEW RECORD: {self.best_fitness_ever:.1f}")
+            
+            # Track history
+            self.history['best_fitness'].append(best_agent.fitness)
+            self.history['mean_fitness'].append(mean_fitness)
+            self.history['worst_fitness'].append(worst_fitness)
+            self.history['population_diversity'].append(pop_diversity)
+            self.history['gamma_mean'].append(gamma_mean)
+            self.history['revolution_count'].append(0)
+            
+            # =============== LOGGING ===============
+            if generation % 10 == 0 or generation == self.generations - 1:
+                elapsed = (datetime.now() - start_time).total_seconds()
+                logger.info(
+                    f"Gen {generation:3d} | Best: {best_agent.fitness:6.1f} | "
+                    f"Mean: {mean_fitness:6.1f} | Div: {pop_diversity:.3f} | "
+                    f"γ_mean: {gamma_mean:.4f} | Time: {elapsed:.1f}s"
+                )
+            
+            # =============== REPRODUCTION PHASE ===============
+            elite_count = max(3, int(self.pop_size * self.elite_fraction))
+            new_population = []
+            
+            for i in range(self.pop_size):
+                # Elite preservation
+                if i < elite_count:
+                    child = self.population[i].clone()
+                    child.agent_id = i
+                    child.generation_born = generation
+                    new_population.append(child)
+                    continue
+                
+                # Selection from elite
+                parent = random.choice(self.population[:elite_count])
+                child = parent.clone()
+                child.agent_id = i
+                child.generation_born = generation
+                
+                # =============== MUTATION ===============
+                child.mutate(mutation_rate=0.8, mutation_std=0.35)
+                
+                # =============== REVOLUTION MECHANISM ===============
+                if random.random() < self.revolution_prob:
+                    child.dna = np.random.uniform(-2.0, 2.0, 32).astype(np.float32)
+                    child.revolution_count += 1
+                    self.revolution_events.append({
+                        'generation': generation,
+                        'agent_id': i,
+                        'parent_fitness': parent.fitness
+                    })
+                    logger.warning(
+                        f"⚡ REVOLUTION at gen {generation}, agent {i} "
+                        f"(parent fitness: {parent.fitness:.1f})"
+                    )
+                
+                child.policy.load_from_dna(child.dna)
+                new_population.append(child)
+            
+            self.population = new_population
+            self.history['revolution_count'][-1] = len(
+                [r for r in self.revolution_events 
+                 if r['generation'] == generation]
+            )
+        
+        # =============== FINALIZATION ===============
+        elapsed = (datetime.now() - start_time).total_seconds()
+        logger.info("=" * 80)
+        logger.info(f"✅ EVOLUTION COMPLETED in {elapsed:.1f} seconds")
+        logger.info(f"🏆 Best fitness achieved: {self.best_fitness_ever:.1f}")
+        logger.info("=" * 80)
+        
+        return self.best_agent_ever
+    
+    def save_statistics(self, output_dir: str = "results"):
+        """Save evolution statistics to file"""
+        Path(output_dir).mkdir(exist_ok=True)
+        
+        stats = {
+            'config': {
+                'pop_size': self.pop_size,
+                'generations': self.generations,
+                'environment': self.env_name,
+                'revolution_prob': self.revolution_prob,
+            },
+            'results': {
+                'best_fitness_ever': float(self.best_fitness_ever),
+                'best_agent_dna': self.best_agent_ever.dna.tolist(),
+            },
+            'history': {k: v for k, v in self.history.items()},
+            'revolution_events': self.revolution_events,
+        }
+        
+        with open(f"{output_dir}/statistics.json", 'w') as f:
+            json.dump(stats, f, indent=2)
+        
+        logger.info(f"Statistics saved to {output_dir}/statistics.json")
+    
+    def plot_evolution(self, output_dir: str = "results"):
+        """Generate visualization plots"""
+        Path(output_dir).mkdir(exist_ok=True)
+        
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle('AlgoGenesis Evolution Analysis', fontsize=16, fontweight='bold')
+        
+        generations = list(range(len(self.history['best_fitness'])))
+        
+        # Plot 1: Fitness over time
+        axes[0, 0].plot(generations, self.history['best_fitness'], 'g-', label='Best', linewidth=2)
+        axes[0, 0].plot(generations, self.history['mean_fitness'], 'b-', label='Mean', alpha=0.7)
+        axes[0, 0].fill_between(
+            generations,
+            self.history['worst_fitness'],
+            self.history['best_fitness'],
+            alpha=0.2, color='green'
+        )
+        axes[0, 0].set_xlabel('Generation')
+        axes[0, 0].set_ylabel('Fitness')
+        axes[0, 0].set_title('Population Fitness')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # Plot 2: Population diversity
+        axes[0, 1].plot(generations, self.history['population_diversity'], 'purple', linewidth=2)
+        axes[0, 1].fill_between(generations, 0, self.history['population_diversity'], alpha=0.3, color='purple')
+        axes[0, 1].set_xlabel('Generation')
+        axes[0, 1].set_ylabel('Diversity')
+        axes[0, 1].set_title('Genetic Diversity Over Time')
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # Plot 3: UHF Coherence (Gamma)
+        axes[1, 0].plot(generations, self.history['gamma_mean'], 'orange', linewidth=2)
+        axes[1, 0].fill_between(generations, 0, self.history['gamma_mean'], alpha=0.3, color='orange')
+        axes[1, 0].set_xlabel('Generation')
+        axes[1, 0].set_ylabel('γ (Coherence)')
+        axes[1, 0].set_title('UHF Coherence Metric')
+        axes[1, 0].set_ylim([0, 1])
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # Plot 4: Revolutions
+        axes[1, 1].bar(generations, self.history['revolution_count'], color='red', alpha=0.7)
+        axes[1, 1].set_xlabel('Generation')
+        axes[1, 1].set_ylabel('Revolution Count')
+        axes[1, 1].set_title('Revolution Events Per Generation')
+        axes[1, 1].grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/evolution_analysis.png", dpi=150, bbox_inches='tight')
+        logger.info(f"Plot saved to {output_dir}/evolution_analysis.png")
+        plt.close()
+
+
+# ====================== Main Execution ======================
+if __name__ == "__main__":
+    # Set seeds for reproducibility
+    torch.manual_seed(42)
+    np.random.seed(42)
+    random.seed(42)
+    
+    # Run evolution
+    evolution = AlgoGenesis(
+        pop_size=25,
+        generations=100,
+        env_name='CartPole-v1',
+        revolution_prob=0.09,
+        elite_fraction=0.25,
+    )
+    
+    best_agent = evolution.run()
+    
+    # Save results
+    evolution.save_statistics("results")
+    evolution.plot_evolution("results")
+    
+    logger.info(f"\n🏆 FINAL RESULTS:")
+    logger.info(f"   Best Agent Fitness: {best_agent.fitness:.1f}")
+    logger.info(f"   Final γ_eff: {best_agent.gamma:.4f}")
+    logger.info(f"   Total revolutions triggered: {len(evolution.revolution_events)}")
